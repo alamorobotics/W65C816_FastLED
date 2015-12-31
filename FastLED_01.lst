@@ -1,0 +1,693 @@
+  Thu Dec 31 2015 14:19                                                Page 1
+
+    "FastLED FastLED_01.asm"
+    
+
+                     ***************************************
+                     **      WDC 65C816 Macro Assembler   **
+                     **                                   **
+                     **     Version 3.49.1- Feb  6 2006    **
+                     ***************************************
+
+     1                        ; File: FastLED.asm
+     2                        ; 12/26/2015
+     3                        
+     4                        ;############################# DESCIPTION ########
+                    ################
+     5                        
+     6                        ; This is a rewrite of the FastLED6502 found at,
+     7                        ; https://github.com/FastLED/FastLED/blob/master/e
+                    xtras/FastLED6502.s65
+     8                        
+     9                        ; However to simplify the code I'm not bit-banging
+                     the output but 
+    10                        ; rather using the shift register in the VIA.
+    11                        
+    12                        ; The LED driver is a LPD8806 and I currently only
+                     have one hooked
+    13                        ; up to test the code.
+    14                        
+    15                        ; Below is a simple text description of the LPD880
+                    6 protocol. No known datasheet exists.
+    16                        
+    17                        ; Each LPD8806 has 6 PWM outputs and can therefore
+                     drive two RGB LEDs.
+    18                        ; It has two lines for SPI input (data & clock), a
+                    nd two lines for SPI output (data & clock).
+    19                        ; It is implemented in a very simple way:
+    20                        ; When it receives a zero byte, it resets its byte
+                    Count to 0, and writes a zero byte on the output.
+    21                        ; When it receives a byte with the high bit set (i
+                    e ORed with 0x80) and its byteCount < 6,
+    22                        ; it uses the lower 7 bits of the byte to set the 
+                    output of one of the PWM outputs.
+    23                        ; It then increments byteCount to move to the next
+                     PWM output.
+    24                        ; If byteCount == 6, it just sends the byte to the
+                     output.
+    25                        ; When these chips are chained together, with the 
+                    inputs of the second chip connected to the output
+    26                        ; of the first chip, they are quite easy to use. Y
+                    ou just send a total of 3 bytes per LED, and
+    27                        ; bytes 1-3 go to the first one, 4-6 to the second
+                    , and so on. The byte order is GRB instead of RGB.
+    28                        
+    29                        ; The color value is 7 bits per color, for 128 * 1
+                    28 * 128 = 2,097,152 colors.
+    30                        
+    31                        ;########################### PIN ASSIGNMENTS #####
+                    ################
+    32                        
+  Thu Dec 31 2015 14:19                                                Page 2
+
+    "FastLED FastLED_01.asm"
+    
+
+    33                        ; Clock on LPD8806 is connected to CB1 (pin 18 ) o
+                    n the 6522.
+    34                        ; Data In on LPD8806 is connected to CB2 (pin 19) 
+                    on the 6522.
+    35                        
+    36                        ;#################################################
+                    ################
+    37                        
+    38                        	PW 80          ;Page Width (# of char/line)
+    39                        	PL 60          ;Page Length for HP Laser
+    40                        	INCLIST ON     ;Add Include files in Listing
+    41                        
+    42                        ;*********************************************
+    43                        ;Test for Valid Processor defined in -D option
+    44                        ;*********************************************
+    45                        	IF USING_816
+    46                        	ELSE
+    47                        		EXIT  "Not Valid Processor: Use -DUSING_
+                    02, etc."
+    48                        	ENDIF
+    49                        
+    50                        	TITLE  "FastLED FastLED_01.asm"
+    51                        	STTL
+    52                        
+    53                        ;########################### I/O addreses ########
+                    #############
+    54                        	
+    55             00007FC0   VIA_BASE		EQU $7FC0		; base a
+                    ddress of VIA port on SXB
+    56             00007FC0   VIA_ORB			EQU VIA_BASE
+    57             00007FC0   VIA_IRB			EQU VIA_BASE
+    58             00007FC1   VIA_ORA			EQU VIA_BASE+1
+    59             00007FC1   VIA_IRA			EQU VIA_BASE+1
+    60             00007FC2   VIA_DDRB		EQU VIA_BASE+2
+    61             00007FC3   VIA_DDRA		EQU VIA_BASE+3
+    62             00007FC4   VIA_T1CLO		EQU VIA_BASE+4
+    63             00007FC5   VIA_T1CHI		EQU VIA_BASE+5
+    64             00007FC6   VIA_T1LLO		EQU VIA_BASE+6
+    65             00007FC7   VIA_T1LHI		EQU VIA_BASE+7
+    66             00007FC8   VIA_T2CLO		EQU VIA_BASE+8
+    67             00007FC9   VIA_T2CHI		EQU VIA_BASE+9
+    68             00007FCA   VIA_SR			EQU VIA_BASE+10
+    69             00007FCB   VIA_ACR			EQU VIA_BASE+11
+    70             00007FCC   VIA_PCR			EQU VIA_BASE+12
+    71             00007FCD   VIA_IFR			EQU VIA_BASE+13
+    72             00007FCE   VIA_IER			EQU VIA_BASE+14
+    73             00007FCF   VIA_ORANH		EQU VIA_BASE+15
+    74             00007FCF   VIA_IRANH		EQU VIA_BASE+15
+    75                        
+    76             00007FA0   PIA_BASE		EQU $7FA0		; base a
+                    ddress of PIA port on SXB
+    77             00007FA0   PIA_ORA			EQU PIA_BASE
+    78             00007FA0   PIA_IRA			EQU PIA_BASE
+    79             00007FA0   PIA_DDRA		EQU PIA_BASE
+    80             00007FA1   PIA_CTRLA		EQU PIA_BASE+1
+  Thu Dec 31 2015 14:19                                                Page 3
+
+    "FastLED FastLED_01.asm"
+    
+
+    81             00007FA2   PIA_ORB			EQU PIA_BASE+2
+    82             00007FA2   PIA_IRB			EQU PIA_BASE+2
+    83             00007FA2   PIA_DDRB		EQU PIA_BASE+2
+    84             00007FA3   PIA_CTRLB		EQU PIA_BASE+3
+    85                        
+    86                        ;########################### Propeller addreses ##
+                    ###################
+    87                        
+    88             00000000   VGA_BASE		EQU $00			; "base 
+                    address" of VGA, this address is sent to the propeller
+    89             00000000   VGA_PRINT		EQU VGA_BASE
+    90             00000001   VGA_COL			EQU VGA_BASE+$01
+    91             00000002   VGA_ROW			EQU VGA_BASE+$02
+    92             00000003   VGA_ROW_COLOR	EQU VGA_BASE+$03
+    93             00000004   VGA_ROW_BACK	EQU VGA_BASE+$04
+    94             00000005   VGA_AUTO_INC	EQU VGA_BASE+$05
+    95             00000006   VGA_FILL_CHAR	EQU VGA_BASE+$06
+    96             00000007   VGA_FILL_COL	EQU VGA_BASE+$07
+    97             00000008   VGA_FILL_BACK	EQU VGA_BASE+$08
+    98             00000009   VGA_SCROLL_UP	EQU VGA_BASE+$09
+    99             0000000A   VGA_SCROLL_DN	EQU VGA_BASE+$0A
+   100                        
+   101             00000010   VGA_CUR1_X		EQU VGA_BASE+$10
+   102             00000011   VGA_CUR1_Y		EQU VGA_BASE+$11
+   103             00000012   VGA_CUR1_MODE	EQU VGA_BASE+$12
+   104             00000013   VGA_CUR2_X		EQU VGA_BASE+$13
+   105             00000014   VGA_CUR2_Y		EQU VGA_BASE+$14
+   106             00000015   VGA_CUR2_MODE	EQU VGA_BASE+$15
+   107                        
+   108             00000020   SID_BASE		EQU $20		; "base address"
+                     of SID emulation, this address is sent to the propeller
+   109             00000020   SID_FR1LO		EQU SID_BASE
+   110             00000021   SID_FR1HI		EQU SID_BASE+$01
+   111             00000022   SID_PW1LO		EQU SID_BASE+$02
+   112             00000023   SID_PW1HI		EQU SID_BASE+$03
+   113             00000024   SID_CR1			EQU SID_BASE+$04
+   114             00000025   SID_AD1			EQU SID_BASE+$05
+   115             00000026   SID_SR1			EQU SID_BASE+$06
+   116                        
+   117             00000027   SID_FR2LO		EQU SID_BASE+$07
+   118             00000028   SID_FR2HI		EQU SID_BASE+$08
+   119             00000029   SID_PW2LO		EQU SID_BASE+$09
+   120             0000002A   SID_PW2HI		EQU SID_BASE+$0A
+   121             0000002B   SID_CR2			EQU SID_BASE+$0B
+   122             0000002C   SID_AD2			EQU SID_BASE+$0C
+   123             0000002D   SID_SR2			EQU SID_BASE+$0D
+   124                        
+   125             0000002E   SID_FR3LO		EQU SID_BASE+$0E
+   126             0000002F   SID_FR3HI		EQU SID_BASE+$0F
+   127             00000030   SID_PW3LO		EQU SID_BASE+$10
+   128             00000031   SID_PW3HI		EQU SID_BASE+$11
+   129             00000032   SID_CR3			EQU SID_BASE+$12
+   130             00000033   SID_AD3			EQU SID_BASE+$13
+   131             00000034   SID_SR3			EQU SID_BASE+$14
+   132                        
+  Thu Dec 31 2015 14:19                                                Page 4
+
+    "FastLED FastLED_01.asm"
+    
+
+   133             00000035   SID_FCLO		EQU SID_BASE+$15
+   134             00000036   SID_FCHI		EQU SID_BASE+$16
+   135             00000037   SID_RESFIL		EQU SID_BASE+$17
+   136             00000038   SID_MODVOL		EQU SID_BASE+$18
+   137                        
+   138                        ;########################### Zero Page ###########
+                    ##########
+   139                        
+   140             00000010   Red_Value		EQU $10		; Red value 0-12
+                    7
+   141             00000011   Green_Value		EQU $11		; Green 
+                    value 0-127
+   142             00000012   Blue_Value		EQU $12		; Blue v
+                    alue 0-127
+   143                        
+   144             00000013   RGB_Pos			EQU $13		; Which 
+                    position in the "rainbow" are we on ?
+   145             00000014   NUM_LED			EQU $14		; How ma
+                    ny RGB LEDs in the strip
+   146                        
+   147                        ;########################### Main Program ########
+                    #############
+   148                        
+   149                        	CHIP 65C02
+   150                        	LONGI OFF
+   151                        	LONGA OFF
+   152                        
+   153                        	.STTL "FastLED"
+   154                        	.PAGE
+   155                        				ORG $0200
+  Thu Dec 31 2015 14:19                                                Page 5
+
+    "FastLED FastLED_01.asm"
+    "FastLED"
+
+   156                        START
+   157 00:0200: 20 6A 02     				JSR init_VIA		
+                    		; Init VIA
+   158                        				
+   159 00:0203: 64 13        				STZ RGB_Pos		
+                    			; Reset position
+   160                        				
+   161                        MAIN_LOOP				
+   162 00:0205: 20 5F 02     				JSR SendDataZero	
+                    		; Reset LED strip.
+   163                        				
+   164 00:0208: A4 13        				LDY RGB_Pos		
+                    			; Get current pos
+   165 00:020A: C8           				INY			
+                    				; Increase
+   166 00:020B: 84 13        				STY RGB_Pos		
+                    			; Store next pos
+   167                        				
+   168 00:020D: A9 3C        				LDA #60			
+                    			; I have 60 LEDs in my strip.
+   169 00:020F: 85 14        				STA NUM_LED
+   170                        				
+   171                        				
+   172 00:0211: B9 xx xx     LED_LOOP		LDA FastLED_RainbowR, Y		
+                    ; Get Red value from lookup table
+   173 00:0214: 4A           				LSR			
+                    				; We only use 7 bits, discard lo
+                    west bit.
+   174 00:0215: 09 80        				ORA #$80		
+                    			; Set high bit for value, it should alwa
+                    ys be high.
+   175 00:0217: 85 10        				STA Red_Value		
+                    		; Save value
+   176                        
+   177 00:0219: B9 xx xx     				LDA FastLED_RainbowG, Y	
+                    	; Same for Green
+   178 00:021C: 4A           				LSR
+   179 00:021D: 09 80        				ORA #$80
+   180 00:021F: 85 11        				STA Green_Value
+   181                        
+   182 00:0221: B9 xx xx     				LDA FastLED_RainbowB, Y	
+                    	; And same for Blue
+   183 00:0224: 4A           				LSR
+   184 00:0225: 09 80        				ORA #$80
+   185 00:0227: 85 12        				STA Blue_Value
+   186                        
+   187 00:0229: 20 3E 02     				JSR SendData		
+                    		; Shift it out.
+   188                        
+   189 00:022C: C8           				INY			
+                    				; Next color
+   190                        				
+   191 00:022D: C6 14        				DEC	NUM_LED
+   192 00:022F: D0 E0        				BNE LED_LOOP
+   193                        
+  Thu Dec 31 2015 14:19                                                Page 6
+
+    "FastLED FastLED_01.asm"
+    "FastLED"
+
+   194                        
+   195 00:0231: A0 80        delay        	LDY #$80            ; Loop 128*2
+                    56 times...
+   196 00:0233: A2 00        				LDX #$00
+   197 00:0235: CA           dloop1       	DEX
+   198 00:0236: D0 FD        				BNE dloop1
+   199 00:0238: 88           				DEY
+   200 00:0239: D0 FA        				BNE dloop1		
+                    		
+   201                        				
+   202 00:023B: 4C 05 02     				JMP MAIN_LOOP
+   203                        
+   204 00:023E: A6 11        SendData      	LDX Green_Value     ; Green valu
+                    e for LED
+   205 00:0240: 8E CA 7F     				STX VIA_SR          ; Sh
+                    ift it...
+   206 00:0243: A9 04        				LDA #$04		
+                    	; Test Bit 4
+   207 00:0245: 2C CD 7F     d_wait1       	BIT VIA_IFR			
+                    ; Are we done yet ?
+   208 00:0248: F0 FB        				BEQ d_wait1         ; No
+                    pe, continue...
+   209 00:024A: A6 10        				LDX Red_Value       ; Re
+                    d value for LED
+   210 00:024C: 8E CA 7F     				STX VIA_SR          ; Sh
+                    ift it...
+   211 00:024F: 2C CD 7F     d_wait2     	BIT VIA_IFR			
+                    ; Are we done yet ?
+   212 00:0252: F0 FB        				BEQ d_wait2         ; No
+                    pe, continue...				
+   213 00:0254: A6 12        				LDX Blue_Value      ; Bl
+                    ue value for LED
+   214 00:0256: 8E CA 7F     				STX VIA_SR          ; Sh
+                    ift it...
+   215 00:0259: 2C CD 7F     d_wait3       	BIT VIA_IFR			
+                    ; Are we done yet ?
+   216 00:025C: F0 FB        				BEQ d_wait3         ; No
+                    pe, continue...				
+   217 00:025E: 60           				RTS
+   218                        
+   219                        SendDataZero       		
+   220 00:025F: 9C CA 7F     				STZ VIA_SR          ; Re
+                    set LED driver.
+   221 00:0262: A9 04        				LDA #$04		
+                    	; Test Bit 4
+   222 00:0264: 2C CD 7F     d_waitZ			BIT VIA_IFR		
+                    	; Are we done yet ?
+   223 00:0267: F0 FB        				BEQ d_waitZ         ; No
+                    pe, continue...
+   224 00:0269: 60           				RTS
+   225                        				
+   226                        init_VIA
+   227 00:026A: AD CB 7F     				LDA VIA_ACR         ; Lo
+                    ad ACR
+   228 00:026D: 29 E3        				AND #$E3            ; Ze
+  Thu Dec 31 2015 14:19                                                Page 7
+
+    "FastLED FastLED_01.asm"
+    "FastLED"
+
+                    ro bit 4,3,2.
+   229 00:026F: 09 18        				ORA #$18            ; Sh
+                    ift out ($10) using Phi2 ($08).
+   230 00:0271: 8D CB 7F     				STA VIA_ACR
+   231 00:0274: 60           				RTS
+   232                        				
+   233                        ;-------------------------------------------------
+                    ------------------------
+   234                        ; FUNCTION NAME	: Event Hander re-vectors
+   235                        ;-------------------------------------------------
+                    ------------------------
+   236                        IRQHandler:
+   237 00:0275: 48           				PHA
+   238 00:0276: 68           				PLA
+   239 00:0277: 40           				RTI
+   240                        
+   241                        badVec			; $FFE0 - IRQRVD2(134)
+   242 00:0278: 08           				PHP
+   243 00:0279: 48           				PHA
+   244 00:027A: A9 FF        				LDA #$FF
+   245                        				;clear Irq
+   246 00:027C: 68           				PLA
+   247 00:027D: 28           				PLP
+   248 00:027E: 40           				RTI
+   249                        
+   250                        ;########################### Data segment ########
+                    #############
+   251                        
+   252                        	DATA
+   253                        
+   254                        ; Rainbow RGB data taken from the original driver.
+                    ..	
+   255                        	
+   256                        FastLED_RainbowR
+   257 00:0000: FF FD FA F8  	BYTE $FF,$FD,$FA,$F8,$F5,$F2,$F0,$ED
+       00:0004: F5 F2 F0 ED 
+   258 00:0008: EA E8 E5 E2  	BYTE $EA,$E8,$E5,$E2,$E0,$DD,$DA,$D8
+       00:000C: E0 DD DA D8 
+   259 00:0010: D5 D2 D0 CD  	BYTE $D5,$D2,$D0,$CD,$CA,$C8,$C5,$C2
+       00:0014: CA C8 C5 C2 
+   260 00:0018: C0 BD BA B8  	BYTE $C0,$BD,$BA,$B8,$B5,$B2,$B0,$AD
+       00:001C: B5 B2 B0 AD 
+   261 00:0020: AB AB AB AB  	BYTE $AB,$AB,$AB,$AB,$AB,$AB,$AB,$AB
+       00:0024: AB AB AB AB 
+   262 00:0028: AB AB AB AB  	BYTE $AB,$AB,$AB,$AB,$AB,$AB,$AB,$AB
+       00:002C: AB AB AB AB 
+   263 00:0030: AB AB AB AB  	BYTE $AB,$AB,$AB,$AB,$AB,$AB,$AB,$AB
+       00:0034: AB AB AB AB 
+   264 00:0038: AB AB AB AB  	BYTE $AB,$AB,$AB,$AB,$AB,$AB,$AB,$AB
+       00:003C: AB AB AB AB 
+   265 00:0040: AB A6 A1 9C  	BYTE $AB,$A6,$A1,$9C,$96,$91,$8C,$86
+       00:0044: 96 91 8C 86 
+   266 00:0048: 81 7C 76 71  	BYTE $81,$7C,$76,$71,$6C,$66,$61,$5C
+       00:004C: 6C 66 61 5C 
+   267 00:0050: 56 51 4C 47  	BYTE $56,$51,$4C,$47,$41,$3C,$37,$31
+  Thu Dec 31 2015 14:19                                                Page 8
+
+    "FastLED FastLED_01.asm"
+    "FastLED"
+
+       00:0054: 41 3C 37 31 
+   268 00:0058: 2C 27 21 1C  	BYTE $2C,$27,$21,$1C,$17,$11,$0C,$07
+       00:005C: 17 11 0C 07 
+   269 00:0060: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0064: 00 00 00 00 
+   270 00:0068: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:006C: 00 00 00 00 
+   271 00:0070: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0074: 00 00 00 00 
+   272 00:0078: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:007C: 00 00 00 00 
+   273 00:0080: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0084: 00 00 00 00 
+   274 00:0088: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:008C: 00 00 00 00 
+   275 00:0090: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0094: 00 00 00 00 
+   276 00:0098: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:009C: 00 00 00 00 
+   277 00:00A0: 00 02 05 07  	BYTE $00,$02,$05,$07,$0A,$0D,$0F,$12
+       00:00A4: 0A 0D 0F 12 
+   278 00:00A8: 15 17 1A 1D  	BYTE $15,$17,$1A,$1D,$1F,$22,$25,$27
+       00:00AC: 1F 22 25 27 
+   279 00:00B0: 2A 2D 2F 32  	BYTE $2A,$2D,$2F,$32,$35,$37,$3A,$3D
+       00:00B4: 35 37 3A 3D 
+   280 00:00B8: 3F 42 45 47  	BYTE $3F,$42,$45,$47,$4A,$4D,$4F,$52
+       00:00BC: 4A 4D 4F 52 
+   281 00:00C0: 55 57 5A 5C  	BYTE $55,$57,$5A,$5C,$5F,$62,$64,$67
+       00:00C4: 5F 62 64 67 
+   282 00:00C8: 6A 6C 6F 72  	BYTE $6A,$6C,$6F,$72,$74,$77,$7A,$7C
+       00:00CC: 74 77 7A 7C 
+   283 00:00D0: 7F 82 84 87  	BYTE $7F,$82,$84,$87,$8A,$8C,$8F,$92
+       00:00D4: 8A 8C 8F 92 
+   284 00:00D8: 94 97 9A 9C  	BYTE $94,$97,$9A,$9C,$9F,$A2,$A4,$A7
+       00:00DC: 9F A2 A4 A7 
+   285 00:00E0: AB AD B0 B2  	BYTE $AB,$AD,$B0,$B2,$B5,$B8,$BA,$BD
+       00:00E4: B5 B8 BA BD 
+   286 00:00E8: C0 C2 C5 C8  	BYTE $C0,$C2,$C5,$C8,$CA,$CD,$D0,$D2
+       00:00EC: CA CD D0 D2 
+   287 00:00F0: D5 D8 DA DD  	BYTE $D5,$D8,$DA,$DD,$E0,$E2,$E5,$E8
+       00:00F4: E0 E2 E5 E8 
+   288 00:00F8: EA ED F0 F2  	BYTE $EA,$ED,$F0,$F2,$F5,$F8,$FA,$FD
+       00:00FC: F5 F8 FA FD 
+   289                        FastLED_RainbowG
+   290 00:0100: 00 02 05 07  	BYTE $00,$02,$05,$07,$0A,$0D,$0F,$12
+       00:0104: 0A 0D 0F 12 
+   291 00:0108: 15 17 1A 1D  	BYTE $15,$17,$1A,$1D,$1F,$22,$25,$27
+       00:010C: 1F 22 25 27 
+   292 00:0110: 2A 2D 2F 32  	BYTE $2A,$2D,$2F,$32,$35,$37,$3A,$3D
+       00:0114: 35 37 3A 3D 
+   293 00:0118: 3F 42 45 47  	BYTE $3F,$42,$45,$47,$4A,$4D,$4F,$52
+       00:011C: 4A 4D 4F 52 
+   294 00:0120: 55 57 5A 5C  	BYTE $55,$57,$5A,$5C,$5F,$62,$64,$67
+       00:0124: 5F 62 64 67 
+   295 00:0128: 6A 6C 6F 72  	BYTE $6A,$6C,$6F,$72,$74,$77,$7A,$7C
+  Thu Dec 31 2015 14:19                                                Page 9
+
+    "FastLED FastLED_01.asm"
+    "FastLED"
+
+       00:012C: 74 77 7A 7C 
+   296 00:0130: 7F 82 84 87  	BYTE $7F,$82,$84,$87,$8A,$8C,$8F,$92
+       00:0134: 8A 8C 8F 92 
+   297 00:0138: 94 97 9A 9C  	BYTE $94,$97,$9A,$9C,$9F,$A2,$A4,$A7
+       00:013C: 9F A2 A4 A7 
+   298 00:0140: AB AD B0 B2  	BYTE $AB,$AD,$B0,$B2,$B5,$B8,$BA,$BD
+       00:0144: B5 B8 BA BD 
+   299 00:0148: C0 C2 C5 C8  	BYTE $C0,$C2,$C5,$C8,$CA,$CD,$D0,$D2
+       00:014C: CA CD D0 D2 
+   300 00:0150: D5 D8 DA DD  	BYTE $D5,$D8,$DA,$DD,$E0,$E2,$E5,$E8
+       00:0154: E0 E2 E5 E8 
+   301 00:0158: EA ED F0 F2  	BYTE $EA,$ED,$F0,$F2,$F5,$F8,$FA,$FD
+       00:015C: F5 F8 FA FD 
+   302 00:0160: FF FD FA F8  	BYTE $FF,$FD,$FA,$F8,$F5,$F2,$F0,$ED
+       00:0164: F5 F2 F0 ED 
+   303 00:0168: EA E8 E5 E2  	BYTE $EA,$E8,$E5,$E2,$E0,$DD,$DA,$D8
+       00:016C: E0 DD DA D8 
+   304 00:0170: D5 D2 D0 CD  	BYTE $D5,$D2,$D0,$CD,$CA,$C8,$C5,$C2
+       00:0174: CA C8 C5 C2 
+   305 00:0178: C0 BD BA B8  	BYTE $C0,$BD,$BA,$B8,$B5,$B2,$B0,$AD
+       00:017C: B5 B2 B0 AD 
+   306 00:0180: AB A6 A1 9C  	BYTE $AB,$A6,$A1,$9C,$96,$91,$8C,$86
+       00:0184: 96 91 8C 86 
+   307 00:0188: 81 7C 76 71  	BYTE $81,$7C,$76,$71,$6C,$66,$61,$5C
+       00:018C: 6C 66 61 5C 
+   308 00:0190: 56 51 4C 47  	BYTE $56,$51,$4C,$47,$41,$3C,$37,$31
+       00:0194: 41 3C 37 31 
+   309 00:0198: 2C 27 21 1C  	BYTE $2C,$27,$21,$1C,$17,$11,$0C,$07
+       00:019C: 17 11 0C 07 
+   310 00:01A0: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01A4: 00 00 00 00 
+   311 00:01A8: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01AC: 00 00 00 00 
+   312 00:01B0: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01B4: 00 00 00 00 
+   313 00:01B8: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01BC: 00 00 00 00 
+   314 00:01C0: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01C4: 00 00 00 00 
+   315 00:01C8: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01CC: 00 00 00 00 
+   316 00:01D0: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01D4: 00 00 00 00 
+   317 00:01D8: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01DC: 00 00 00 00 
+   318 00:01E0: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01E4: 00 00 00 00 
+   319 00:01E8: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01EC: 00 00 00 00 
+   320 00:01F0: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01F4: 00 00 00 00 
+   321 00:01F8: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:01FC: 00 00 00 00 
+   322                        FastLED_RainbowB
+   323 00:0200: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+  Thu Dec 31 2015 14:19                                                Page 10
+
+    "FastLED FastLED_01.asm"
+    "FastLED"
+
+       00:0204: 00 00 00 00 
+   324 00:0208: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:020C: 00 00 00 00 
+   325 00:0210: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0214: 00 00 00 00 
+   326 00:0218: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:021C: 00 00 00 00 
+   327 00:0220: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0224: 00 00 00 00 
+   328 00:0228: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:022C: 00 00 00 00 
+   329 00:0230: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0234: 00 00 00 00 
+   330 00:0238: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:023C: 00 00 00 00 
+   331 00:0240: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0244: 00 00 00 00 
+   332 00:0248: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:024C: 00 00 00 00 
+   333 00:0250: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:0254: 00 00 00 00 
+   334 00:0258: 00 00 00 00  	BYTE $00,$00,$00,$00,$00,$00,$00,$00
+       00:025C: 00 00 00 00 
+   335 00:0260: 00 02 05 07  	BYTE $00,$02,$05,$07,$0A,$0D,$0F,$12
+       00:0264: 0A 0D 0F 12 
+   336 00:0268: 15 17 1A 1D  	BYTE $15,$17,$1A,$1D,$1F,$22,$25,$27
+       00:026C: 1F 22 25 27 
+   337 00:0270: 2A 2D 2F 32  	BYTE $2A,$2D,$2F,$32,$35,$37,$3A,$3D
+       00:0274: 35 37 3A 3D 
+   338 00:0278: 3F 42 45 47  	BYTE $3F,$42,$45,$47,$4A,$4D,$4F,$52
+       00:027C: 4A 4D 4F 52 
+   339 00:0280: 55 5A 5F 64  	BYTE $55,$5A,$5F,$64,$6A,$6F,$74,$7A
+       00:0284: 6A 6F 74 7A 
+   340 00:0288: 7F 84 8A 8F  	BYTE $7F,$84,$8A,$8F,$94,$9A,$9F,$A4
+       00:028C: 94 9A 9F A4 
+   341 00:0290: AA AF B4 B9  	BYTE $AA,$AF,$B4,$B9,$BF,$C4,$C9,$CF
+       00:0294: BF C4 C9 CF 
+   342 00:0298: D4 D9 DF E4  	BYTE $D4,$D9,$DF,$E4,$E9,$EF,$F4,$F9
+       00:029C: E9 EF F4 F9 
+   343 00:02A0: FF FD FA F8  	BYTE $FF,$FD,$FA,$F8,$F5,$F2,$F0,$ED
+       00:02A4: F5 F2 F0 ED 
+   344 00:02A8: EA E8 E5 E2  	BYTE $EA,$E8,$E5,$E2,$E0,$DD,$DA,$D8
+       00:02AC: E0 DD DA D8 
+   345 00:02B0: D5 D2 D0 CD  	BYTE $D5,$D2,$D0,$CD,$CA,$C8,$C5,$C2
+       00:02B4: CA C8 C5 C2 
+   346 00:02B8: C0 BD BA B8  	BYTE $C0,$BD,$BA,$B8,$B5,$B2,$B0,$AD
+       00:02BC: B5 B2 B0 AD 
+   347 00:02C0: AB A9 A6 A4  	BYTE $AB,$A9,$A6,$A4,$A1,$9E,$9C,$99
+       00:02C4: A1 9E 9C 99 
+   348 00:02C8: 96 94 91 8E  	BYTE $96,$94,$91,$8E,$8C,$89,$86,$84
+       00:02CC: 8C 89 86 84 
+   349 00:02D0: 81 7E 7C 79  	BYTE $81,$7E,$7C,$79,$76,$74,$71,$6E
+       00:02D4: 76 74 71 6E 
+   350 00:02D8: 6C 69 66 64  	BYTE $6C,$69,$66,$64,$61,$5E,$5C,$59
+       00:02DC: 61 5E 5C 59 
+  Thu Dec 31 2015 14:19                                                Page 11
+
+    "FastLED FastLED_01.asm"
+    "FastLED"
+
+   351 00:02E0: 55 53 50 4E  	BYTE $55,$53,$50,$4E,$4B,$48,$46,$43
+       00:02E4: 4B 48 46 43 
+   352 00:02E8: 40 3E 3B 38  	BYTE $40,$3E,$3B,$38,$36,$33,$30,$2E
+       00:02EC: 36 33 30 2E 
+   353 00:02F0: 2B 28 26 23  	BYTE $2B,$28,$26,$23,$20,$1E,$1B,$18
+       00:02F4: 20 1E 1B 18 
+   354 00:02F8: 16 13 10 0E  	BYTE $16,$13,$10,$0E,$0B,$08,$06,$03
+       00:02FC: 0B 08 06 03 
+   355                        				
+   356 00:0300:              	ENDS
+   357                        
+   358                        ;-----------------------------
+   359                        ;
+   360                        ;		Reset and Interrupt Vectors (define for 
+                    265, 816/02 are subsets)
+   361                        ;
+   362                        ;-----------------------------
+   363                        
+   364                        Shadow_VECTORS	SECTION OFFSET $7EE0
+   365                        							
+                    	;65C816 Interrupt Vectors
+   366                        							
+                    	;Status bit E = 0 (Native mode, 16 bit mode)
+   367 00:7EE0: 78 02        				DW badVec		
+                    ; $FFE0 - IRQRVD4(816)
+   368 00:7EE2: 78 02        				DW badVec		
+                    ; $FFE2 - IRQRVD5(816)
+   369 00:7EE4: 78 02        				DW badVec		
+                    ; $FFE4 - COP(816)
+   370 00:7EE6: 78 02        				DW badVec		
+                    ; $FFE6 - BRK(816)
+   371 00:7EE8: 78 02        				DW badVec		
+                    ; $FFE8 - ABORT(816)
+   372 00:7EEA: 78 02        				DW badVec		
+                    ; $FFEA - NMI(816)
+   373 00:7EEC: 78 02        				DW badVec		
+                    ; $FFEC - IRQRVD(816)
+   374 00:7EEE: 78 02        				DW badVec		
+                    ; $FFEE - IRQ(816)
+   375                        							
+                    	;Status bit E = 1 (Emulation mode, 8 bit mode)
+   376 00:7EF0: 78 02        				DW badVec		
+                    ; $FFF0 - IRQRVD2(8 bit Emulation)(IRQRVD(265))
+   377 00:7EF2: 78 02        				DW badVec		
+                    ; $FFF2 - IRQRVD1(8 bit Emulation)(IRQRVD(265))
+   378 00:7EF4: 78 02        				DW badVec		
+                    ; $FFF4 - COP(8 bit Emulation)
+   379 00:7EF6: 78 02        				DW badVec   	; $FFF6 
+                    - IRQRVD0(8 bit Emulation)(IRQRVD(265))
+   380 00:7EF8: 78 02        				DW badVec		
+                    ; $FFF8 - ABORT(8 bit Emulation)
+   381                        							
+                    	; Common 8 bit Vectors for all CPUs
+   382 00:7EFA: 78 02        				DW badVec		
+                    ; $FFFA -  NMIRQ (ALL)
+  Thu Dec 31 2015 14:19                                                Page 12
+
+    "FastLED FastLED_01.asm"
+    "FastLED"
+
+   383 00:7EFC: 00 02        				DW START		
+                    ; $FFFC -  RESET (ALL)
+   384 00:7EFE: 75 02        				DW IRQHandler	; $FFFE 
+                    -  IRQBRK (ALL)
+   385 00:7F00:              	ENDS
+   386                        
+   387                        vectors	SECTION OFFSET $FFE0
+   388                        							
+                    	;65C816 Interrupt Vectors
+   389                        							
+                    	;Status bit E = 0 (Native mode, 16 bit mode)
+   390 00:FFE0: 78 02        				DW badVec		
+                    ; $FFE0 - IRQRVD4(816)
+   391 00:FFE2: 78 02        				DW badVec		
+                    ; $FFE2 - IRQRVD5(816)
+   392 00:FFE4: 78 02        				DW badVec		
+                    ; $FFE4 - COP(816)
+   393 00:FFE6: 78 02        				DW badVec		
+                    ; $FFE6 - BRK(816)
+   394 00:FFE8: 78 02        				DW badVec		
+                    ; $FFE8 - ABORT(816)
+   395 00:FFEA: 78 02        				DW badVec		
+                    ; $FFEA - NMI(816)
+   396 00:FFEC: 78 02        				DW badVec		
+                    ; $FFEC - IRQRVD(816)
+   397 00:FFEE: 78 02        				DW badVec		
+                    ; $FFEE - IRQ(816)
+   398                        							
+                    	;Status bit E = 1 (Emulation mode, 8 bit mode)
+   399 00:FFF0: 78 02        				DW badVec		
+                    ; $FFF0 - IRQRVD2(8 bit Emulation)(IRQRVD(265))
+   400 00:FFF2: 78 02        				DW badVec		
+                    ; $FFF2 - IRQRVD1(8 bit Emulation)(IRQRVD(265))
+   401 00:FFF4: 78 02        				DW badVec		
+                    ; $FFF4 - COP(8 bit Emulation)
+   402 00:FFF6: 78 02        				DW badVec		
+                    ; $FFF6 - IRQRVD0(8 bit Emulation)(IRQRVD(265))
+   403 00:FFF8: 78 02        				DW badVec		
+                    ; $FFF8 - ABORT(8 bit Emulation)
+   404                        							
+                    	; Common 8 bit Vectors for all CPUs
+   405 00:FFFA: 78 02        				DW badVec		
+                    ; $FFFA -  NMIRQ (ALL)
+   406 00:FFFC: 00 02        				DW START		
+                    ; $FFFC -  RESET (ALL)
+   407 00:FFFE: 75 02        				DW IRQHandler	; $FFFE 
+                    -  IRQBRK (ALL)
+   408 01:0000:              	ENDS
+   409                        	END
+
+
+      Lines assembled: 409
+      Errors: 0
